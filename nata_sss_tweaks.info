@@ -1,0 +1,5 @@
+name = SSSI Tweaks
+description = "Custom handling for various steps in the SSSI application process"
+package = NATA
+core = 7.x
+dependencies[] = civicrm

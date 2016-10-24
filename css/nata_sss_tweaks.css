@@ -1,0 +1,11 @@
+/**
+ * Custom styles for nata_sss_tweaks.module.
+ */
+
+div.nata_sss_pongage_validate_yes_warning {
+  margin: 0px 15px;
+  padding: 10px;
+  background-color: #fef5f1;
+  border: 1px solid #ed541d;
+  color: #8c2e0b;
+}
