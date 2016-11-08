@@ -56,34 +56,22 @@ function _nata_sss_tweaks_get_minimumrequirement_onpage_validation_formkeys($nid
   return $ret;
 }
 
-function nata_sss_tweaks_civicrm_buildAmount($a = NULL, $b = NULL) {
-  dsm(func_get_args(), __FUNCTION__);
-}
 
-function nata_sss_tweaks_form_alter(&$form, &$form_state, $form_id) {
-//  if ($form_id == 'webform_client_form_5') {
-//    $form['submitted']['my_form_component'] = array(
-//      '#type' => 'markup',
-//      '#value' => 'A spurious text title',
-//    );
-//    dsm($form, "$form_id form");
-//
-////    dsm($form_state['webform'], "$form_id state");
-//  }
-  
+function nata_sss_tweaks_form_alter(&$form, &$form_state, $form_id) {  
   $nids = _nata_sss_tweaks_get_webform_nids();
   if ($form_id == 'webform_client_form_' . $nids['step_1']) {
     array_unshift($form['#submit'], 'nata_sss_tweaks_form_webform_client_form_step1_submit');
   }
   elseif ($form_id == 'webform_client_form_' . $nids['step_3']) {
     array_unshift($form['#submit'], 'nata_sss_tweaks_form_webform_client_form_step3_submit');
+    array_unshift($form['#validate'], 'nata_sss_tweaks_form_webform_client_form_step3_validate');
   }
 
 }
 
 function nata_sss_tweaks_form_webform_client_form_step1_submit($form, &$form_state) {
   if (array_key_exists('civicrm_1_case_1_cg14_custom_84', $form_state['values']['submitted'])) {
-    _nata_sss_flatten_webform_values($form_state['values']['submitted']['sss_qualifications'], $values);
+    _nata_sss_tweaks_flatten_webform_values($form_state['values']['submitted']['sss_qualifications'], $values);
     // If the only value submitted was 1, put them in the first team.
     if (array_values(array_unique($values)) == array(1)) {
       $form_state['values']['submitted']['civicrm_1_case_1_cg14_custom_84'] = 'first';
@@ -118,10 +106,10 @@ function _nata_sss_tweaks_get_webform_nids() {
  * @param Array $values The array to extract from.
  * @param Array $ret (Reference) The flattened array.
  */
-function _nata_sss_flatten_webform_values($values, &$ret = array()) {
+function _nata_sss_tweaks_flatten_webform_values($values, &$ret = array()) {
   foreach ($values as $key => $value) {
     if (is_array($value)) {
-      _nata_sss_flatten_webform_values($value, $ret);
+      _nata_sss_tweaks_flatten_webform_values($value, $ret);
     }
     else {
       $ret[$key] = $value;
@@ -129,6 +117,61 @@ function _nata_sss_flatten_webform_values($values, &$ret = array()) {
   }
 }
 
+/**
+ * Form validation handler for Step 3 webform.
+ */
+function nata_sss_tweaks_form_webform_client_form_step3_validate($form, &$form_state) {
+  if ($form_state['values']['submitted']['civicrm_2_membership_1_membership_fee_amount'] == 100) {
+    if (!_nata_sss_tweaks_validate_existing_sss_id($form_state['values']['submitted']['existing_safe_sports_school_id'])) {
+      form_set_error('submitted][existing_safe_sports_school_id', t('We cannot find a Safe Sports School with the given ID. Please select "New Member", or <a href="https://www.nata.org/advocacy/youth-sports-safety/safe-sports-schools">contact us</a> for help with your renewal.'));
+    }
+  }
+}
+
+/**
+ * Check whether the given membership ID is a current SSS membership.
+ *
+ * @return boolean
+ */
+function _nata_sss_tweaks_validate_existing_sss_id($sss_id) {  
+  $ret = FALSE;
+
+  civicrm_initialize();
+  
+  $membership_type = civicrm_api3('MembershipType', 'getsingle', array(
+    'sequential' => 1,
+    'name' => "Safe Sports School",
+  ));
+  
+  $result = civicrm_api3('MembershipStatus', 'get', array(
+    'sequential' => 0,
+    'is_current_member' => 1,
+    'is_active' => 1,
+  ));
+  $membership_status_ids = array_keys($result['values']);
+  if (!empty($membership_status_ids)) {  
+    $api_params = array(
+      'membership_type_id' => $membership_type[id],
+      'status_id' => array (
+        'IN' => $membership_status_ids,
+      ),
+      'id' => $sss_id,
+    );    
+    $result = civicrm_api3('Membership', 'get', $api_params);
+    if ($result['count'] == 1) {
+      $ret = TRUE;
+    }
+  }
+  
+  return $ret;
+}
+
+/**
+ * Implements hook_civicrm_dashboard().
+ *
+ * Force CiviCRM dashboard to 1 column.
+ *
+ */
 function nata_sss_tweaks_civicrm_dashboard( $contactID, &$contentPlacement ) {
   CRM_Core_Resources::singleton()->addStyle(<<<EOT
     #civicrm-dashboard .column {
@@ -140,4 +183,23 @@ function nata_sss_tweaks_civicrm_dashboard( $contactID, &$contentPlacement ) {
     }
 EOT
 );
+}
+
+/**
+ * Implements hook_civicrm_alterMailParams().
+ */
+function nata_sss_tweaks_civicrm_alterMailParams(&$params, $context) {
+  // For message template "membership online receipt", add the membership ID
+  // to the template variables, based on the contribution ID, if any.
+  if ($context == 'messageTemplate') {
+    if ($params['valueName'] == 'membership_online_receipt' && !empty($params['tplParams']['contributionID'])){
+      $result = civicrm_api3('MembershipPayment', 'getsingle', array(
+        'contribution_id' => $params['tplParams']['contributionID'],
+      ));
+      $membership_id = $result['membership_id'];
+      if (!empty($membership_id)) {
+        $params['tplParams']['membership_id'] = $membership_id;
+      }
+    }
+  }
 }
