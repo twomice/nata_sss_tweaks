@@ -139,6 +139,18 @@ function nata_sss_tweaks_form_webform_client_form_step4_submit($form, &$form_sta
   $school_cid = $form_state['values']['submitted']['civicrm_3_contact_1_fieldset_fieldset']['civicrm_3_contact_1_contact_contact_id'];
   $renewal_code = _nata_sss_tweaks_get_renewal_code_for_contact_id($school_cid);
   $form_state['values']['submitted']['renewal_code'] = $renewal_code;
+
+  // Update membership to begin today.
+  $membership = _nata_sss_tweaks_get_membership_for_contact_id($school_cid);
+  $membership_type = civicrm_api3('MembershipType', 'getsingle', array(
+    'sequential' => 1,
+    'name' => "Safe Sports School",
+  ));
+  $result = civicrm_api3('Membership', 'create', array(
+    'id' => $membership['id'],
+    'start_date' => date('Y-m-d'),
+    'end_date' => date('Y-m-d', strtotime("yesterday +{$membership_type['duration_interval']} {$membership_type['duration_unit']}")),
+  ));
 }
 
 function _nata_sss_tweaks_get_webform_nids() {
@@ -238,14 +250,28 @@ function _nata_sss_tweaks_get_contact_id_for_renewal_code($renewal_code) {
   return $ret;
 }
 
+function _nata_sss_tweaks_get_custom_field_id($custom_group_id, $name) {
+  static $cache = array();
+  $key = $custom_group_id . '|' . $name;
+  if (!array_key_exists($key, $cache)) {
+    $custom_field = civicrm_api3('CustomField', 'getsingle', array(
+      'sequential' => 1,
+      'custom_group_id' => $custom_group_id,
+      'name' => $name,
+    ));
+    $cache[$key] = $custom_field['id'];
+  }
+  return $cache[$key];
+}
+
 /**
- * Get renewal code for an active SSS membership of the given contact_id, or '' if no
- * such membership is found.
+ * Get latest active SSS membership for the given contact_id, or array() if
+ * not found.
  *
  * @return String
  */
-function _nata_sss_tweaks_get_renewal_code_for_contact_id($cid) {
-  $ret = '';
+function _nata_sss_tweaks_get_membership_for_contact_id($cid) {
+  $ret = array();
 
   civicrm_initialize();
 
@@ -253,12 +279,7 @@ function _nata_sss_tweaks_get_renewal_code_for_contact_id($cid) {
     'sequential' => 1,
     'name' => "Safe Sports School",
   ));
-  $custom_field = civicrm_api3('CustomField', 'getsingle', array(
-    'sequential' => 1,
-    'custom_group_id' => "SSSI_membership_details",
-    'name' => "Renewal_Code",
-  ));
-  $custom_field_id = $custom_field['id'];
+  $custom_field_id = _nata_sss_tweaks_get_custom_field_id("SSSI_membership_details", "Renewal_Code");
 
   $result = civicrm_api3('MembershipStatus', 'get', array(
     'sequential' => 0,
@@ -278,10 +299,25 @@ function _nata_sss_tweaks_get_renewal_code_for_contact_id($cid) {
     );
     $result = civicrm_api3('Membership', 'get', $api_params);
     if ($result['count'] == 1) {
-      $ret = $result['values'][0]["custom_{$custom_field_id}"];
+      $ret = $result['values'][0];
     }
   }
+  return $ret;
+}
 
+/**
+ * Get renewal code for an active SSS membership of the given contact_id, or '' if no
+ * such membership is found.
+ *
+ * @return String
+ */
+function _nata_sss_tweaks_get_renewal_code_for_contact_id($cid) {
+  $ret = '';
+  $custom_field_id = _nata_sss_tweaks_get_custom_field_id("SSSI_membership_details", "Renewal_Code");
+  $membership = _nata_sss_tweaks_get_membership_for_contact_id($cid);
+  if (!empty($membership["custom_{$custom_field_id}"])) {
+    $ret = $membership["custom_{$custom_field_id}"];
+  }
   return $ret;
 }
 
