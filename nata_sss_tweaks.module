@@ -30,6 +30,9 @@ function nata_sss_tweaks_node_view($node, $view_mode, $langcode) {
       drupal_add_js($setting, 'setting');
       drupal_add_js(drupal_get_path('module', 'nata_sss_tweaks') . '/js/nata_sss_tweaks_webform_step1.js');
       break;
+    case 'step_3':
+      drupal_add_js(drupal_get_path('module', 'nata_sss_tweaks') . '/js/nata_sss_tweaks_webform_step3.js');
+      break;
     default:
       $setting = array(
         'nata_sss_tweaks' => array(
@@ -57,16 +60,49 @@ function _nata_sss_tweaks_get_minimumrequirement_onpage_validation_formkeys($nid
 }
 
 
-function nata_sss_tweaks_form_alter(&$form, &$form_state, $form_id) {  
+function nata_sss_tweaks_form_alter(&$form, &$form_state, $form_id) {
   $nids = _nata_sss_tweaks_get_webform_nids();
   if ($form_id == 'webform_client_form_' . $nids['step_1']) {
+    _nata_sss_tweaks_form_webform_step1_alter($form, $form_state, $form_id);
     array_unshift($form['#submit'], 'nata_sss_tweaks_form_webform_client_form_step1_submit');
   }
   elseif ($form_id == 'webform_client_form_' . $nids['step_3']) {
     array_unshift($form['#submit'], 'nata_sss_tweaks_form_webform_client_form_step3_submit');
-    array_unshift($form['#validate'], 'nata_sss_tweaks_form_webform_client_form_step3_validate');
+    array_unshift($form['#validate'], '_nata_sss_tweaks_validate_submitted_code');
   }
+  elseif ($form_id == 'webform_client_form_' . $nids['step_0']) {
+    array_unshift($form['#submit'], 'nata_sss_tweaks_form_webform_client_form_step0_submit');
+    array_unshift($form['#validate'], '_nata_sss_tweaks_validate_submitted_code');
+  }
+  elseif ($form_id == 'webform_client_form_' . $nids['step_4']) {
+    array_unshift($form['#submit'], 'nata_sss_tweaks_form_webform_client_form_step4_submit');
+  }
+}
 
+function _nata_sss_tweaks_form_webform_step1_alter(&$form, &$form_state, $form_id) {
+  // If the query parameters include a school CID and an SSS Renewal Code, verify
+  // the code belongs to the school; if it doesn't, this is a security bypass
+  // attempt, not a legitimate user error, so just deny access.
+  $query = drupal_get_query_parameters();
+  if ($query['code'] && $query['cid2']) {
+    if ($query['cid2'] != _nata_sss_tweaks_get_contact_id_for_renewal_code($query['code'])) {
+      drupal_access_denied();
+    }
+  }
+}
+
+function nata_sss_tweaks_form_webform_client_form_step0_submit($form, &$form_state) {
+  $nids = _nata_sss_tweaks_get_webform_nids();
+  $options = array(
+    'query' => array(
+      'cid2' => _nata_sss_tweaks_get_contact_id_for_renewal_code($form_state['values']['submitted']['renewal_code']),
+      'code' => $form_state['values']['submitted']['renewal_code'],
+    ),
+  );
+  // I'd use $form_state['redirect'] here, but webform doesn't seem to honor it,
+  // and really we're just using this webform to setup the correct URL query
+  // parameters, so this goto is all we need.
+  drupal_goto('node/' . $nids['step_1'], $options);
 }
 
 function nata_sss_tweaks_form_webform_client_form_step1_submit($form, &$form_state) {
@@ -84,15 +120,31 @@ function nata_sss_tweaks_form_webform_client_form_step1_submit($form, &$form_sta
 }
 
 function nata_sss_tweaks_form_webform_client_form_step3_submit($form, &$form_state) {
-  // Copy "team" setting from case to membership.
-  if (array_key_exists('civicrm_1_case_1_cg14_custom_84', $form_state['values']['submitted'])) {
+  // Copy "team" from case to membership.
+  if (!empty($form_state['values']['submitted']['civicrm_1_case_1_cg14_custom_84'])) {
     $form_state['values']['submitted']['civicrm_2_membership_1_membership_custom_83'] = $form_state['values']['submitted']['civicrm_1_case_1_cg14_custom_84'];
   }
+
+  // Generate a new Renewal Code for every new membership; this causes an existing
+  // member's Renewal Code to change (which is inconvenient) but also prevents
+  // a Renewal Code from being used by two different contacts.
+  if ($form_state['values']['op'] == 'Submit') {
+    $form_state['values']['submitted']['civicrm_2_membership_1_membership_custom_87'] = _nata_sss_tweaks_generate_renewal_code($form_state['values']['submitted']['civicrm_2_contact_1_contact_contact_id']);
+  }
+}
+
+function nata_sss_tweaks_form_webform_client_form_step4_submit($form, &$form_state) {
+  // Modify 'renewal_code' field value to contain the membership's Renewal Code,
+  // so it will appear in the congratulations email.
+  $school_cid = $form_state['values']['submitted']['civicrm_3_contact_1_fieldset_fieldset']['civicrm_3_contact_1_contact_contact_id'];
+  $renewal_code = _nata_sss_tweaks_get_renewal_code_for_contact_id($school_cid);
+  $form_state['values']['submitted']['renewal_code'] = $renewal_code;
 }
 
 function _nata_sss_tweaks_get_webform_nids() {
   // TODO: Remove hard-coded node IDs and add a UI configuration to track these.
   return array(
+    'step_0' => 11,
     'step_1' => 5,
     'step_2' => 7,
     'step_3' => 8,
@@ -118,23 +170,36 @@ function _nata_sss_tweaks_flatten_webform_values($values, &$ret = array()) {
 }
 
 /**
- * Form validation handler for Step 3 webform.
+ * Validation for webforms accepting a Renewal Code.
  */
-function nata_sss_tweaks_form_webform_client_form_step3_validate($form, &$form_state) {
-  if ($form_state['values']['submitted']['civicrm_2_membership_1_membership_fee_amount'] == 100) {
-    if (!_nata_sss_tweaks_validate_existing_sss_id($form_state['values']['submitted']['existing_safe_sports_school_id'])) {
-      form_set_error('submitted][existing_safe_sports_school_id', t('We cannot find a Safe Sports School with the given ID. Please select "New Member", or <a href="https://www.nata.org/advocacy/youth-sports-safety/safe-sports-schools">contact us</a> for help with your renewal.'));
+function _nata_sss_tweaks_validate_submitted_code($form, &$form_state) {
+  $renewal_price = 100;
+  $invalid_message = t('We cannot find a Safe Sports School with the given Renewal Code. Please select "New Member", or <a href="https://www.nata.org/advocacy/youth-sports-safety/safe-sports-schools">contact us</a> for help with your renewal.');
+  $nids = _nata_sss_tweaks_get_webform_nids();
+  if ($form['#form_id'] == 'webform_client_form_' . $nids['step_3']) {
+    if ($form_state['values']['submitted']['civicrm_2_membership_1_membership_fee_amount'] == $renewal_price) {
+      if (!_nata_sss_tweaks_get_contact_id_for_renewal_code($form_state['values']['submitted']['civicrm_1_case_1_cg14_custom_86'])) {
+        form_set_error('submitted][civicrm_1_case_1_cg14_custom_86', $invalid_message);
+      }
+    }
+  }
+  elseif ($form['#form_id'] == 'webform_client_form_' . $nids['step_0']) {
+    if ($form_state['values']['submitted']['application_type'] == $renewal_price) {
+      if (!_nata_sss_tweaks_get_contact_id_for_renewal_code($form_state['values']['submitted']['renewal_code'])) {
+        form_set_error('submitted][renewal_code', $invalid_message);
+      }
     }
   }
 }
 
 /**
- * Check whether the given membership ID is a current SSS membership.
+ * Get contact_id for a membership with the given renewal code, or 0 if no
+ * such membership is found for the given code.
  *
- * @return boolean
+ * @return Int
  */
-function _nata_sss_tweaks_validate_existing_sss_id($sss_id) {  
-  $ret = FALSE;
+function _nata_sss_tweaks_get_contact_id_for_renewal_code($renewal_code) {
+  $ret = 0;
 
   civicrm_initialize();
   
@@ -142,6 +207,12 @@ function _nata_sss_tweaks_validate_existing_sss_id($sss_id) {
     'sequential' => 1,
     'name' => "Safe Sports School",
   ));
+  $custom_field = civicrm_api3('CustomField', 'getsingle', array(
+    'sequential' => 1,
+    'custom_group_id' => "SSSI_membership_details",
+    'name' => "Renewal_Code",
+  ));
+  $custom_field_id = $custom_field['id'];
   
   $result = civicrm_api3('MembershipStatus', 'get', array(
     'sequential' => 0,
@@ -155,14 +226,62 @@ function _nata_sss_tweaks_validate_existing_sss_id($sss_id) {
       'status_id' => array (
         'IN' => $membership_status_ids,
       ),
-      'id' => $sss_id,
-    );    
+      "custom_{$custom_field_id}" => $renewal_code,
+      'sequential' => 1,
+    );
     $result = civicrm_api3('Membership', 'get', $api_params);
     if ($result['count'] == 1) {
-      $ret = TRUE;
+      $ret = $result['values'][0]['contact_id'];
     }
   }
   
+  return $ret;
+}
+
+/**
+ * Get renewal code for an active SSS membership of the given contact_id, or '' if no
+ * such membership is found.
+ *
+ * @return String
+ */
+function _nata_sss_tweaks_get_renewal_code_for_contact_id($cid) {
+  $ret = '';
+
+  civicrm_initialize();
+
+  $membership_type = civicrm_api3('MembershipType', 'getsingle', array(
+    'sequential' => 1,
+    'name' => "Safe Sports School",
+  ));
+  $custom_field = civicrm_api3('CustomField', 'getsingle', array(
+    'sequential' => 1,
+    'custom_group_id' => "SSSI_membership_details",
+    'name' => "Renewal_Code",
+  ));
+  $custom_field_id = $custom_field['id'];
+
+  $result = civicrm_api3('MembershipStatus', 'get', array(
+    'sequential' => 0,
+    'is_current_member' => 1,
+    'is_active' => 1,
+  ));
+  $membership_status_ids = array_keys($result['values']);
+  if (!empty($membership_status_ids)) {
+    $api_params = array(
+      'membership_type_id' => $membership_type[id],
+      'status_id' => array (
+        'IN' => $membership_status_ids,
+      ),
+      'contact_id' => $cid,
+      'return' => array("custom_{$custom_field_id}"),
+      'sequential' => 1,
+    );
+    $result = civicrm_api3('Membership', 'get', $api_params);
+    if ($result['count'] == 1) {
+      $ret = $result['values'][0]["custom_{$custom_field_id}"];
+    }
+  }
+
   return $ret;
 }
 
@@ -202,4 +321,8 @@ function nata_sss_tweaks_civicrm_alterMailParams(&$params, $context) {
       }
     }
   }
+}
+
+function _nata_sss_tweaks_generate_renewal_code($cid = 0) {
+  return mt_rand(100000, 999999) . '-' . $cid;
 }
