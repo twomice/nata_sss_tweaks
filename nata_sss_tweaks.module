@@ -134,6 +134,17 @@ function _nata_sss_tweaks_form_webform_client_form_step3_submit($form, &$form_st
   if ($form_state['values']['op'] == 'Submit') {
     $form_state['values']['submitted']['civicrm_2_membership_1_membership_custom_87'] = _nata_sss_tweaks_generate_renewal_code($form_state['values']['submitted']['civicrm_2_contact_1_contact_contact_id']);
   }
+
+  if (array_key_exists('civicrm_1_contribution_1_contribution_payment_processor_id', $form_state['values']['submitted'])) {
+    if ($form_state['values']['submitted']['civicrm_1_contribution_1_contribution_payment_processor_id'] == 0) {
+      // This is a "pay later" submission. Empty the "credit card" instructions and leave "pay later" instructions alone.
+      $form_state['values']['submitted']['natasss_payment_instructions_cc'] = '';
+    }
+    else {
+      // This is a credit card submission. Empty the "pay later" instructions and leave "credit card" instructions alone.
+      $form_state['values']['submitted']['natasss_payment_instructions_check'] = '';
+    }
+  }
 }
 
 function _nata_sss_tweaks_form_webform_client_form_step4_submit($form, &$form_state) {
