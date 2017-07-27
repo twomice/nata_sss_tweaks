@@ -17,26 +17,27 @@ function nata_sss_tweaks_node_view($node, $view_mode, $langcode) {
 
   drupal_add_css(drupal_get_path('module', 'nata_sss_tweaks') . '/css/nata_sss_tweaks.css');
 
-
   $nid_step = array_search($node->nid, $nids);
   switch ($nid_step) {
     case 'step_1':
       $setting = array(
         'nata_sss_tweaks' => array(
           'onpage_validate_yes_formkeys' => _nata_sss_tweaks_get_minimumrequirement_onpage_validation_formkeys($node->nid),
-        )
+        ),
       );
       drupal_add_js($setting, 'setting');
       drupal_add_js(drupal_get_path('module', 'nata_sss_tweaks') . '/js/nata_sss_tweaks_webform_step1.js');
       break;
+
     case 'step_3':
       drupal_add_js(drupal_get_path('module', 'nata_sss_tweaks') . '/js/nata_sss_tweaks_webform_step3.js');
       break;
+
     default:
       $setting = array(
         'nata_sss_tweaks' => array(
           'step' => $nid_step,
-        )
+        ),
       );
       drupal_add_js($setting, 'setting');
       drupal_add_js(drupal_get_path('module', 'nata_sss_tweaks') . '/js/nata_sss_tweaks_webform.js');
@@ -183,8 +184,8 @@ function _nata_sss_tweaks_get_webform_nids() {
 /**
  * Recursively extract all non-array values from a given array
  *
- * @param Array $values The array to extract from.
- * @param Array $ret (Reference) The flattened array.
+ * @param array $values The array to extract from.
+ * @param array $ret (Reference) The flattened array.
  */
 function _nata_sss_tweaks_flatten_webform_values($values, &$ret = array()) {
   foreach ($values as $key => $value) {
@@ -284,7 +285,7 @@ function _nata_sss_tweaks_get_custom_field_id($custom_group_id, $name) {
  * Get latest active SSS membership for the given contact_id, or array() if
  * not found.
  *
- * @return String
+ * @return string
  */
 function _nata_sss_tweaks_get_membership_for_contact_id($cid) {
   $ret = array();
@@ -325,7 +326,7 @@ function _nata_sss_tweaks_get_membership_for_contact_id($cid) {
  * Get renewal code for an active SSS membership of the given contact_id, or '' if no
  * such membership is found.
  *
- * @return String
+ * @return string
  */
 function _nata_sss_tweaks_get_renewal_code_for_contact_id($cid) {
   $ret = '';
@@ -370,6 +371,40 @@ function nata_sss_tweaks_civicrm_alterMailParams(&$params, $context) {
       $membership_id = $result['membership_id'];
       if (!empty($membership_id)) {
         $params['tplParams']['membership_id'] = $membership_id;
+      }
+    }
+  }
+}
+
+/**
+ * Implements hook_civicrm_tokens().
+ */
+function nata_sss_tweaks_civicrm_tokens(&$tokens) {
+  $tokens['nata']["nata.sss_start_end_date"] = "Safe Sports Schools Start/End Dates";
+}
+
+/**
+ * Implements hook_civicrm_tokenValues().
+ *
+ */
+function nata_sss_tweaks_civicrm_tokenValues(&$values, $contactIDs, $job = NULL, $tokens = array(), $context = NULL) {
+  if (!empty($tokens['nata'])) {
+    foreach ($tokens['nata'] as $token) {
+      // Find a "Safe Sports School" membership and get the start/end dates.
+      if ($token == 'sss_start_end_date') {
+        $result = civicrm_api3('Membership', 'get', array(
+          'sequential' => 1,
+          'contact_id' => array('IN' => array_values($contactIDs)),
+          'membership_type_id' => "Safe Sports School",
+          'options' => array(
+            'limit' => 0,
+          ),
+        ));
+        foreach ($result['values'] as $resultValue) {
+          $start_date = date('F j, Y', strtotime($resultValue['start_date']));
+          $end_date = date('F j, Y', strtotime($resultValue['end_date']));
+          $values[$resultValue['contact_id']]['nata.sss_start_end_date'] = "from $start_date to $end_date";
+        }
       }
     }
   }
